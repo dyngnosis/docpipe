@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Convert — Docpipe{% endblock %}
+{% block nav_convert %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2><i class="bi bi-arrow-left-right"></i> Convert Document</h2>
+</div>
+
+{% if error %}
+<div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> {{ error }}</div>
+{% endif %}
+
+{% if success %}
+<div class="alert alert-success">
+  <i class="bi bi-check-circle"></i> {{ success }}
+  {% if job_id %}
+  <a href="/jobs/{{ job_id }}/download" class="btn btn-sm btn-success ms-2">
+    <i class="bi bi-download"></i> Download output
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if documents %}
+<div class="card shadow-sm">
+  <div class="card-header"><i class="bi bi-sliders"></i> Conversion Settings</div>
+  <div class="card-body">
+    <form method="post" action="/convert">
+      <div class="mb-3">
+        <label class="form-label" for="document_id">Source Document</label>
+        <select class="form-select" id="document_id" name="document_id" required>
+          <option value="" disabled {% if not request.query_params.get('doc') %}selected{% endif %}>
+            — Select a document —
+          </option>
+          {% for doc in documents %}
+          <option value="{{ doc.id }}"
+            {% if request.query_params.get('doc') == doc.id | string %}selected{% endif %}>
+            {{ doc.original_name }} ({{ doc.format }}, {{ (doc.size / 1024) | round(1) }} KB)
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label" for="output_format">Output Format</label>
+        <select class="form-select" id="output_format" name="output_format" required>
+          <option value="" disabled selected>— Select output format —</option>
+          {% for fmt, label in formats.items() %}
+          <option value="{{ fmt }}">{{ label }} (.{{ fmt }})</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-4">
+        <label class="form-label" for="output_name">Output File Name</label>
+        <div class="input-group">
+          <input class="form-control" type="text" id="output_name" name="output_name"
+                 placeholder="my-report" required
+                 value="{{ request.query_params.get('name', '') }}" />
+          <span class="input-group-text text-muted">.<em>format</em></span>
+        </div>
+        <div class="form-text">
+          Base name for the output file. The format extension will be appended automatically.
+        </div>
+      </div>
+
+      <div class="d-grid">
+        <button class="btn btn-primary btn-lg" type="submit">
+          <i class="bi bi-play-fill"></i> Run Conversion
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle"></i>
+  You have no documents yet.
+  <a href="/documents">Upload a document</a> to get started.
+</div>
+{% endif %}
+
+<div class="card mt-4">
+  <div class="card-header"><i class="bi bi-info-circle"></i> Supported Conversions</div>
+  <div class="card-body">
+    <p class="text-muted mb-2">
+      Docpipe uses <a href="https://pandoc.org" target="_blank">pandoc</a> under the hood.
+      Common conversions:
+    </p>
+    <ul class="list-unstyled row">
+      <li class="col-md-6"><i class="bi bi-check text-success"></i> Markdown &rarr; HTML</li>
+      <li class="col-md-6"><i class="bi bi-check text-success"></i> Markdown &rarr; PDF</li>
+      <li class="col-md-6"><i class="bi bi-check text-success"></i> HTML &rarr; PDF</li>
+      <li class="col-md-6"><i class="bi bi-check text-success"></i> DOCX &rarr; PDF</li>
+      <li class="col-md-6"><i class="bi bi-check text-success"></i> Markdown &rarr; DOCX</li>
+      <li class="col-md-6"><i class="bi bi-check text-success"></i> HTML &rarr; Markdown</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

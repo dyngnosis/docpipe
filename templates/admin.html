@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Admin — Docpipe{% endblock %}
+{% block nav_admin %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2><i class="bi bi-shield-lock"></i> Admin Panel</h2>
+  <span class="badge bg-warning text-dark fs-6">Administrator</span>
+</div>
+
+<!-- Stats row -->
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card text-center border-primary">
+      <div class="card-body">
+        <div class="fs-2 fw-bold text-primary">{{ users | length }}</div>
+        <div class="text-muted">Total Users</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center border-success">
+      <div class="card-body">
+        <div class="fs-2 fw-bold text-success">{{ total_docs }}</div>
+        <div class="text-muted">Documents</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center border-info">
+      <div class="card-body">
+        <div class="fs-2 fw-bold text-info">{{ total_jobs }}</div>
+        <div class="text-muted">Conversion Jobs</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center border-secondary">
+      <div class="card-body">
+        <div class="fs-5 fw-bold text-secondary">
+          {{ ((upload_size + output_size) / 1048576) | round(2) }} MB
+        </div>
+        <div class="text-muted">
+          Storage Used<br/>
+          <small>
+            Uploads: {{ (upload_size / 1048576) | round(2) }} MB &bull;
+            Outputs: {{ (output_size / 1048576) | round(2) }} MB
+          </small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Users table -->
+<h4 class="mb-3"><i class="bi bi-people"></i> Users</h4>
+<div class="table-responsive mb-5">
+  <table class="table table-hover align-middle table-sm">
+    <thead class="table-dark">
+      <tr>
+        <th>#</th>
+        <th>Username</th>
+        <th>Email</th>
+        <th>Role</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td class="text-muted small">{{ u.id }}</td>
+        <td>
+          <i class="bi bi-person-circle"></i> {{ u.username }}
+        </td>
+        <td class="text-muted small">{{ u.email or '—' }}</td>
+        <td>
+          {% if u.role == 'admin' %}
+            <span class="badge bg-warning text-dark">admin</span>
+          {% else %}
+            <span class="badge bg-secondary">user</span>
+          {% endif %}
+        </td>
+        <td class="text-muted small">{{ u.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Jobs table -->
+<h4 class="mb-3"><i class="bi bi-clock-history"></i> Recent Jobs (last 100)</h4>
+<div class="table-responsive">
+  <table class="table table-hover align-middle table-sm">
+    <thead class="table-dark">
+      <tr>
+        <th>Job ID</th>
+        <th>User</th>
+        <th>Document</th>
+        <th>Output Format</th>
+        <th>Output Name</th>
+        <th>Status</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td class="font-monospace small text-muted">{{ job.job_id[:12] }}&hellip;</td>
+        <td>{{ job.username or '—' }}</td>
+        <td>{{ job.original_name or '—' }}</td>
+        <td><span class="badge bg-secondary">{{ job.output_format }}</span></td>
+        <td>{{ job.output_name }}</td>
+        <td>
+          {% if job.status == 'completed' %}
+            <span class="badge bg-success">completed</span>
+          {% elif job.status == 'failed' %}
+            <span class="badge bg-danger">failed</span>
+          {% else %}
+            <span class="badge bg-warning text-dark">{{ job.status }}</span>
+          {% endif %}
+        </td>
+        <td class="text-muted small">{{ job.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

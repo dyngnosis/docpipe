@@ -1,0 +1,43 @@
+/* Docpipe — custom styles */
+
+html, body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+body > main {
+  flex: 1;
+}
+
+.navbar-brand {
+  font-size: 1.25rem;
+  letter-spacing: 0.02em;
+}
+
+.card {
+  border-radius: 0.5rem;
+}
+
+.table th {
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.font-monospace {
+  font-size: 0.8rem;
+}
+
+.badge {
+  font-weight: 500;
+}
+
+footer {
+  font-size: 0.8rem;
+}
+
+/* Status badges */
+.badge.bg-success { background-color: #198754 !important; }
+.badge.bg-danger  { background-color: #dc3545 !important; }
