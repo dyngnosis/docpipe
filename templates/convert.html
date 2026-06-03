@@ -40,6 +40,11 @@
           </option>
           {% endfor %}
         </select>
+        <div id="docMetaPanel" class="mt-2 p-2 bg-light rounded small" style="display:none">
+          <strong>Detected title:</strong> <span id="metaTitle"></span><br>
+          <strong>Author:</strong> <span id="metaAuthor"></span><br>
+          <strong>Words:</strong> <span id="metaWords"></span>
+        </div>
       </div>
 
       <div class="mb-3">
@@ -98,4 +103,31 @@
     </ul>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var sel = document.getElementById('document_id');
+  var panel = document.getElementById('docMetaPanel');
+  if (!sel || !panel) return;
+
+  function loadMeta(docId) {
+    if (!docId) { panel.style.display = 'none'; return; }
+    fetch('/api/documents/' + docId + '/meta')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data) { panel.style.display = 'none'; return; }
+        document.getElementById('metaTitle').textContent = data.extracted_title || '—';
+        document.getElementById('metaAuthor').textContent = data.extracted_author || '—';
+        document.getElementById('metaWords').textContent = data.word_count != null ? data.word_count : '—';
+        panel.style.display = 'block';
+      })
+      .catch(function() { panel.style.display = 'none'; });
+  }
+
+  sel.addEventListener('change', function() { loadMeta(this.value); });
+  if (sel.value) { loadMeta(sel.value); }
+}());
+</script>
 {% endblock %}
