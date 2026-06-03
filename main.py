@@ -30,6 +30,7 @@ from auth import (
 )
 from converter import OUTPUT_DIR, SUPPORTED_FORMATS, run_conversion
 from db import get_db, init_db
+from metadata import extract_metadata
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/data/uploads")
 ALLOWED_EXTENSIONS = {".md", ".markdown", ".html", ".htm", ".txt", ".rst", ".tex", ".docx", ".odt"}
@@ -210,10 +211,16 @@ async def upload_document(
         shutil.copyfileobj(file.file, f)
     size = os.path.getsize(dest)
     fmt = ext.lstrip(".")
+    meta = extract_metadata(dest)
     with get_db() as db:
-        db.execute(
+        cur = db.execute(
             "INSERT INTO documents (user_id, filename, original_name, format, size) VALUES (?, ?, ?, ?, ?)",
             (user["id"], stored_name, file.filename, fmt, size),
+        )
+        doc_id = cur.lastrowid
+        db.execute(
+            "UPDATE documents SET extracted_title=?, extracted_author=?, word_count=? WHERE id=?",
+            (meta["title"], meta["author"], meta["word_count"], doc_id),
         )
     return RedirectResponse("/documents", status_code=302)
 
@@ -233,6 +240,18 @@ async def delete_document(
             os.remove(path)
         db.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
     return RedirectResponse("/documents", status_code=302)
+
+
+@app.get("/api/documents/{doc_id}/meta")
+async def doc_meta(doc_id: int, current_user: dict = Depends(get_current_user)):
+    with get_db() as db:
+        doc = db.execute(
+            "SELECT extracted_title, extracted_author, word_count FROM documents WHERE id = ? AND user_id = ?",
+            (doc_id, current_user["id"]),
+        ).fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return dict(doc)
 
 
 # ---------------------------------------------------------------------------

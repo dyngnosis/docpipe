@@ -44,7 +44,10 @@ CREATE TABLE IF NOT EXISTS documents (
     original_name TEXT,
     format TEXT,
     size INTEGER,
-    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    extracted_title  TEXT DEFAULT '',
+    extracted_author TEXT DEFAULT '',
+    word_count       INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -69,6 +72,16 @@ def init_db():
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        conn.commit()
+
+        # Add metadata columns if they don't exist (SQLite migration for existing DBs)
+        for col in ["extracted_title TEXT DEFAULT ''",
+                    "extracted_author TEXT DEFAULT ''",
+                    "word_count INTEGER DEFAULT 0"]:
+            try:
+                conn.execute(f"ALTER TABLE documents ADD COLUMN {col}")
+            except Exception:
+                pass  # column already exists
         conn.commit()
 
         # Seed admin user

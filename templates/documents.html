@@ -40,6 +40,7 @@
     <thead class="table-light">
       <tr>
         <th>Name</th>
+        <th>Document Title</th>
         <th>Format</th>
         <th>Size</th>
         <th>Uploaded</th>
@@ -52,6 +53,13 @@
         <td>
           <i class="bi bi-file-earmark-text text-muted"></i>
           {{ doc.original_name }}
+        </td>
+        <td>
+          {% if doc.extracted_title %}
+            {{ doc.extracted_title | safe }}
+          {% else %}
+            <span class="text-muted small">—</span>
+          {% endif %}
         </td>
         <td><span class="badge bg-secondary">{{ doc.format }}</span></td>
         <td class="text-muted small">{{ (doc.size / 1024) | round(1) }} KB</td>
