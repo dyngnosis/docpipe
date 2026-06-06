@@ -16,7 +16,7 @@ from fastapi import (
     File,
     status,
 )
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from passlib.hash import bcrypt as bcrypt_hash
@@ -30,9 +30,12 @@ from auth import (
 )
 from converter import OUTPUT_DIR, SUPPORTED_FORMATS, run_conversion
 from db import get_db, init_db
+from ocr import run_ocr
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/data/uploads")
+OCR_UPLOAD_DIR = os.environ.get("OCR_UPLOAD_DIR", "/data/ocr_uploads")
 ALLOWED_EXTENSIONS = {".md", ".markdown", ".html", ".htm", ".txt", ".rst", ".tex", ".docx", ".odt"}
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/tiff"}
 
 app = FastAPI(title="Docpipe", description="Document conversion service")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -43,7 +46,10 @@ templates = Jinja2Templates(directory="templates")
 async def startup():
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(OCR_UPLOAD_DIR, exist_ok=True)
     init_db()
+    # Serve uploaded OCR images so clients can preview them after processing
+    app.mount("/uploads", StaticFiles(directory=OCR_UPLOAD_DIR), name="ocr_uploads")
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +366,102 @@ async def download_output(
         raise HTTPException(status_code=404, detail="Output file missing from disk")
     filename = Path(job["output_path"]).name
     return FileResponse(job["output_path"], filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# OCR
+# ---------------------------------------------------------------------------
+
+@app.post("/ocr", status_code=202)
+async def ocr_upload(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    file: UploadFile = File(...),
+):
+    """
+    Accept a scanned image and kick off an OCR job.
+
+    Accepted content types: image/png, image/jpeg, image/tiff.
+    Returns a job ID that can be polled via GET /ocr/{job_id}.
+    """
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image type '{file.content_type}'. "
+                   f"Accepted: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}",
+        )
+
+    # Persist the original image so it can be re-examined or previewed
+    dest = Path(OCR_UPLOAD_DIR) / file.filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as fh:
+        shutil.copyfileobj(file.file, fh)
+
+    job_id = uuid.uuid4().hex
+    now = datetime.utcnow().isoformat()
+
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO jobs (user_id, document_id, job_id, output_format, output_name,
+                                 status, started_at, created_at)
+               VALUES (?, NULL, ?, 'txt', ?, 'running', ?, ?)""",
+            (user["id"], job_id, Path(file.filename).stem, now, now),
+        )
+
+    result = run_ocr(job_id, str(dest), file.filename)
+    finished = datetime.utcnow().isoformat()
+
+    if result["success"]:
+        status_val = "completed"
+        error_val = None
+    else:
+        status_val = "failed"
+        error_val = result["error"] or "OCR processing failed"
+
+    with get_db() as db:
+        db.execute(
+            """UPDATE jobs SET status = ?, output_path = ?, error = ?, finished_at = ?
+               WHERE job_id = ?""",
+            (status_val, result["output_path"], error_val, finished, job_id),
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": status_val,
+            "image": f"/uploads/{file.filename}",
+        },
+    )
+
+
+@app.get("/ocr/{job_id}")
+async def ocr_job_status(
+    job_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Return the current status and output location for an OCR job."""
+    with get_db() as db:
+        job = db.execute(
+            "SELECT * FROM jobs WHERE job_id = ? AND user_id = ?",
+            (job_id, user["id"]),
+        ).fetchone()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = dict(job)
+    response: dict = {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "created_at": job["created_at"],
+        "finished_at": job["finished_at"],
+    }
+    if job["status"] == "completed":
+        response["download_url"] = f"/jobs/{job_id}/download"
+    elif job["status"] == "failed":
+        response["error"] = job["error"]
+
+    return JSONResponse(content=response)
 
 
 # ---------------------------------------------------------------------------
