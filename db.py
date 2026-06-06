@@ -57,11 +57,20 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT DEFAULT 'pending',
     output_path TEXT,
     error TEXT,
+    webhook_url TEXT,
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema migrations."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "webhook_url" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN webhook_url TEXT")
+        conn.commit()
 
 
 def init_db():
@@ -70,6 +79,7 @@ def init_db():
     try:
         conn.executescript(SCHEMA)
         conn.commit()
+        _migrate(conn)
 
         # Seed admin user
         from passlib.hash import bcrypt as bcrypt_hash
