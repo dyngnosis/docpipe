@@ -29,7 +29,8 @@ from auth import (
     require_admin,
 )
 from converter import OUTPUT_DIR, SUPPORTED_FORMATS, run_conversion
-from db import get_db, init_db
+from db import get_db, init_db, get_document, create_version, list_versions, get_version as db_get_version
+from storage import VERSIONS_DIR, store_version, read_version_file
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/data/uploads")
 ALLOWED_EXTENSIONS = {".md", ".markdown", ".html", ".htm", ".txt", ".rst", ".tex", ".docx", ".odt"}
@@ -43,6 +44,7 @@ templates = Jinja2Templates(directory="templates")
 async def startup():
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(VERSIONS_DIR, exist_ok=True)
     init_db()
 
 
@@ -304,6 +306,22 @@ async def convert_post(
             (status_val, result["output_path"], error_val, finished, job_id),
         )
 
+    if result["success"] and result["output_path"]:
+        try:
+            file_size = store_version(document_id, 0, result["output_path"], output_format)
+            ver_num = create_version(
+                document_id, user["id"], job_id, output_format, output_name, file_size
+            )
+            # Update the stored file to use the real version number
+            import shutil as _shutil
+            from storage import version_path as _vpath
+            tmp = _vpath(document_id, "0", output_format)
+            final = _vpath(document_id, str(ver_num), output_format)
+            if os.path.exists(tmp) and tmp != final:
+                _shutil.move(tmp, final)
+        except Exception:
+            pass  # Version archival is best-effort; job result is already recorded
+
     with get_db() as db:
         docs = db.execute(
             "SELECT * FROM documents WHERE user_id = ? ORDER BY uploaded_at DESC",
@@ -360,6 +378,52 @@ async def download_output(
         raise HTTPException(status_code=404, detail="Output file missing from disk")
     filename = Path(job["output_path"]).name
     return FileResponse(job["output_path"], filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# Document version history
+# ---------------------------------------------------------------------------
+
+@app.get("/document/{doc_id}/versions")
+async def list_document_versions(
+    doc_id: int,
+    user: dict = Depends(get_current_user),
+):
+    doc = get_document(doc_id, user["id"])
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    versions = list_versions(doc_id, user["id"])
+    return {
+        "document_id": doc_id,
+        "document_name": doc["original_name"],
+        "versions": [dict(v) for v in versions],
+    }
+
+
+@app.get("/document/{doc_id}/version/{version_id}")
+async def download_document_version(
+    doc_id: int,
+    version_id: str,
+    user: dict = Depends(get_current_user),
+):
+    doc = get_document(doc_id, user["id"])
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Determine output format from version metadata for correct extension
+    try:
+        ver_num_int = int(version_id)
+        version_meta = db_get_version(doc_id, ver_num_int, user["id"])
+        ext = version_meta["output_format"] if version_meta else "pdf"
+    except (ValueError, TypeError):
+        ext = "pdf"
+
+    path = read_version_file(doc_id, version_id, ext)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Version file not found")
+
+    filename = f"{doc['original_name']}_v{version_id}.{ext}"
+    return FileResponse(path, filename=filename)
 
 
 # ---------------------------------------------------------------------------
