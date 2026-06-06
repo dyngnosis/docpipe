@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import shutil
 from datetime import datetime
@@ -16,7 +17,7 @@ from fastapi import (
     File,
     status,
 )
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from passlib.hash import bcrypt as bcrypt_hash
@@ -28,7 +29,7 @@ from auth import (
     get_current_user_optional,
     require_admin,
 )
-from converter import OUTPUT_DIR, SUPPORTED_FORMATS, run_conversion
+from converter import OUTPUT_DIR, SUPPORTED_FORMATS, TEMPLATE_VARS, run_conversion
 from db import get_db, init_db
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/data/uploads")
@@ -266,6 +267,7 @@ async def convert_post(
     document_id: int = Form(...),
     output_format: str = Form(...),
     output_name: str = Form(...),
+    template_id: Optional[int] = Form(None),
 ):
     if output_format not in SUPPORTED_FORMATS:
         raise HTTPException(status_code=400, detail="Unsupported output format")
@@ -278,6 +280,25 @@ async def convert_post(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
+        # Resolve the PDF template to apply (explicit selection or user default)
+        pdf_template = None
+        if output_format == "pdf":
+            if template_id is not None:
+                tmpl_row = db.execute(
+                    "SELECT header, footer FROM pdf_templates WHERE id = ? AND user_id = ?",
+                    (template_id, user["id"]),
+                ).fetchone()
+                if tmpl_row:
+                    pdf_template = dict(tmpl_row)
+            else:
+                tmpl_row = db.execute(
+                    "SELECT header, footer FROM pdf_templates "
+                    "WHERE user_id = ? AND is_default = 1 LIMIT 1",
+                    (user["id"],),
+                ).fetchone()
+                if tmpl_row:
+                    pdf_template = dict(tmpl_row)
+
         job_id = uuid.uuid4().hex
         now = datetime.utcnow().isoformat()
         db.execute(
@@ -287,7 +308,7 @@ async def convert_post(
         )
 
     input_path = os.path.join(UPLOAD_DIR, doc["filename"])
-    result = run_conversion(job_id, input_path, output_format, output_name)
+    result = run_conversion(job_id, input_path, output_format, output_name, pdf_template=pdf_template)
     finished = datetime.utcnow().isoformat()
 
     if result["success"]:
@@ -360,6 +381,86 @@ async def download_output(
         raise HTTPException(status_code=404, detail="Output file missing from disk")
     filename = Path(job["output_path"]).name
     return FileResponse(job["output_path"], filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# PDF Templates
+# ---------------------------------------------------------------------------
+
+_UNSAFE_TAG_RE = re.compile(r'\{%-?\s*(for|if|block|extends|macro|import|include)')
+
+
+def _validate_template_str(value: str, field: str) -> None:
+    """Reject control-flow tags that could produce unintended output structures."""
+    if _UNSAFE_TAG_RE.search(value):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid syntax in {field}: block-level template tags are not allowed.",
+        )
+
+
+@app.get("/templates")
+async def list_templates(request: Request, user: dict = Depends(get_current_user)):
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, name, header, footer, is_default, created_at, updated_at "
+            "FROM pdf_templates WHERE user_id = ? ORDER BY name ASC",
+            (user["id"],),
+        ).fetchall()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@app.post("/templates", status_code=201)
+async def create_template(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    name: str = Form(...),
+    header: str = Form(""),
+    footer: str = Form(""),
+    is_default: bool = Form(False),
+):
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Template name is required.")
+
+    _validate_template_str(header, "header")
+    _validate_template_str(footer, "footer")
+
+    now = datetime.utcnow().isoformat()
+    with get_db() as db:
+        if is_default:
+            db.execute(
+                "UPDATE pdf_templates SET is_default = 0 WHERE user_id = ?",
+                (user["id"],),
+            )
+        cursor = db.execute(
+            "INSERT INTO pdf_templates (user_id, name, header, footer, is_default, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user["id"], name.strip(), header, footer, int(is_default), now, now),
+        )
+        new_id = cursor.lastrowid
+
+    return JSONResponse(
+        {"id": new_id, "name": name.strip(), "header": header, "footer": footer,
+         "is_default": is_default, "created_at": now, "updated_at": now},
+        status_code=201,
+    )
+
+
+@app.delete("/templates/{template_id}", status_code=204)
+async def delete_template(
+    template_id: int,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id FROM pdf_templates WHERE id = ? AND user_id = ?",
+            (template_id, user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Template not found.")
+        db.execute("DELETE FROM pdf_templates WHERE id = ?", (template_id,))
+    return JSONResponse(None, status_code=204)
 
 
 # ---------------------------------------------------------------------------
