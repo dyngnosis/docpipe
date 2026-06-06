@@ -4,6 +4,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import (
     Cookie,
@@ -28,11 +29,18 @@ from auth import (
     get_current_user_optional,
     require_admin,
 )
-from converter import OUTPUT_DIR, SUPPORTED_FORMATS, run_conversion
+from converter import OUTPUT_DIR, SUPPORTED_FORMATS
 from db import get_db, init_db
+from worker import run_job
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/data/uploads")
 ALLOWED_EXTENSIONS = {".md", ".markdown", ".html", ".htm", ".txt", ".rst", ".tex", ".docx", ".odt"}
+
+
+def validate_webhook_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in ("http", "https")
+
 
 app = FastAPI(title="Docpipe", description="Document conversion service")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -266,9 +274,13 @@ async def convert_post(
     document_id: int = Form(...),
     output_format: str = Form(...),
     output_name: str = Form(...),
+    webhook_url: Optional[str] = Form(None),
 ):
     if output_format not in SUPPORTED_FORMATS:
         raise HTTPException(status_code=400, detail="Unsupported output format")
+
+    if webhook_url and not validate_webhook_url(webhook_url):
+        raise HTTPException(status_code=400, detail="webhook_url must be http or https")
 
     with get_db() as db:
         doc = db.execute(
@@ -281,28 +293,16 @@ async def convert_post(
         job_id = uuid.uuid4().hex
         now = datetime.utcnow().isoformat()
         db.execute(
-            """INSERT INTO jobs (user_id, document_id, job_id, output_format, output_name, status, started_at, created_at)
-               VALUES (?, ?, ?, ?, ?, 'running', ?, ?)""",
-            (user["id"], document_id, job_id, output_format, output_name, now, now),
+            """INSERT INTO jobs
+                   (user_id, document_id, job_id, output_format, output_name,
+                    status, webhook_url, started_at, created_at)
+               VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)""",
+            (user["id"], document_id, job_id, output_format, output_name,
+             webhook_url or None, now, now),
         )
 
     input_path = os.path.join(UPLOAD_DIR, doc["filename"])
-    result = run_conversion(job_id, input_path, output_format, output_name)
-    finished = datetime.utcnow().isoformat()
-
-    if result["success"]:
-        status_val = "completed"
-        error_val = None
-    else:
-        status_val = "failed"
-        error_val = result["stderr"][:1000] if result["stderr"] else "Unknown error"
-
-    with get_db() as db:
-        db.execute(
-            """UPDATE jobs SET status = ?, output_path = ?, error = ?, finished_at = ?
-               WHERE job_id = ?""",
-            (status_val, result["output_path"], error_val, finished, job_id),
-        )
+    result = run_job(job_id, input_path, output_format, output_name, webhook_url or None)
 
     with get_db() as db:
         docs = db.execute(
@@ -318,7 +318,7 @@ async def convert_post(
             "user": user,
             "documents": [dict(d) for d in docs],
             "formats": SUPPORTED_FORMATS,
-            "error": None if result["success"] else (error_val or msg),
+            "error": None if result["success"] else (result.get("error") or msg),
             "success": msg if result["success"] else None,
             "job_id": job_id,
         },
