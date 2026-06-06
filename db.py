@@ -54,12 +54,23 @@ CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT UNIQUE,
     output_format TEXT,
     output_name TEXT,
+    pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE SET NULL,
     status TEXT DEFAULT 'pending',
     output_path TEXT,
     error TEXT,
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS pipelines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    definition TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, name)
 );
 """
 
